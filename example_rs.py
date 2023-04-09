@@ -37,7 +37,7 @@ with respect to factor order is given.
 """
 from itertools import product
 from typing import Iterable, Iterator, Optional, Tuple, Union
-from word_scope_rs import Word # type: ignore
+from word_scope_rs import Word, AvoidingWithPrefix  # type: ignore
 
 from comb_spec_searcher import (
     AtomStrategy,
@@ -52,122 +52,30 @@ from comb_spec_searcher.bijection import ParallelSpecFinder
 from comb_spec_searcher.isomorphism import Bijection
 
 
-# class Word(str, CombinatorialObject):
-#     def size(self):
-#         return str.__len__(self)
+AvoidingWithPrefix.extra_parameters = tuple()
 
 
-class AvoidingWithPrefix(CombinatorialClass[Word]):
-    """The set of words over the 'alphabet' starting with 'prefix' that avoid
-    the consecutive 'patterns'."""
+def objects_of_size(self, size):
+    """Yield the words of given size that start with prefix and avoid the
+    patterns. If just_prefix, then only yield that word."""
 
-    def __init__(
-        self,
-        prefix: Word,
-        patterns: Iterable[Word],
-        alphabet: Iterable[str],
-        just_prefix: bool = False,
-    ):
-        if not all(isinstance(letter, str) and len(letter) == 1 for letter in alphabet):
-            raise ValueError("Alphabet must be an iterable of letters.")
-        self.alphabet = tuple(sorted(alphabet))
-        if not self.word_over_alphabet(prefix):
-            raise ValueError("Prefix must be a word over the given alphabet.")
-        self.prefix: Word = prefix
-        if not all(self.word_over_alphabet(patt) for patt in patterns):
-            raise ValueError("Patterns must be words over the given alphabet.")
-        self.patterns: Tuple[Word, ...] = tuple(sorted(patterns))
-        self.just_prefix = just_prefix
-        super().__init__()
-
-    def word_over_alphabet(self, word: str) -> bool:
-        """Return True if word consists of letters from the alphabet."""
-        return isinstance(word, Word) and all(letter in self.alphabet for letter in word)
-
-    # methods required for combinatorial exploration
-
-    def is_empty(self) -> bool:
-        """Return True if no word over the alphabet avoiding the patterns has
-        this prefix."""
-        return bool(any(p in self.prefix for p in self.patterns))
-
-    def to_jsonable(self) -> dict:
-        """Return a jsonable object of the combinatorial class."""
-        d = super().to_jsonable()
-        d["prefix"] = self.prefix
-        d["patterns"] = tuple(sorted(self.patterns))
-        d["alphabet"] = tuple(sorted(self.alphabet))
-        d["just_prefix"] = int(self.just_prefix)
-        return d
-
-    @classmethod
-    def from_dict(cls, d: dict) -> "AvoidingWithPrefix":
-        """Create an instance of the class from the dictionary returned by the
-        'to_jsonable' method."""
-        return cls(
-            d["prefix"], d["patterns"], d["alphabet"], bool(int(d["just_prefix"]))
-        )
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, AvoidingWithPrefix):
-            return NotImplemented
-        return bool(
-            self.alphabet == other.alphabet
-            and self.prefix == other.prefix
-            and self.patterns == other.patterns
-            and self.just_prefix == other.just_prefix
-        )
-
-    def __hash__(self) -> int:
-        return hash(
-            hash(self.prefix)
-            + hash(self.patterns)
-            + hash(self.alphabet)
-            + hash(self.just_prefix)
-        )
-
-    def __str__(self) -> str:
-        prefix = self.prefix if self.prefix else '""'
-        if self.just_prefix:
-            return "The word {}".format(prefix)
-        return "Words over {{{}}} avoiding {{{}}} with prefix {}" "".format(
-            ", ".join(self.alphabet),
-            ", ".join(map(str, self.patterns)),
-            prefix,
-        )
-
-    def __repr__(self) -> str:
-        return "AvoidindWithPrefix({}, {}, {}".format(
-            repr(self.prefix), repr(self.patterns), repr(self.alphabet)
-        )
-
-    # Method required to get the counts
-
-    def is_atom(self) -> bool:
-        return self.just_prefix
-
-    def minimum_size_of_object(self) -> int:
-        return len(self.prefix)
-
-    def objects_of_size(self, size):
-        """Yield the words of given size that start with prefix and avoid the
-        patterns. If just_prefix, then only yield that word."""
-
-        def possible_words():
-            """Yield all words of given size over the alphabet with prefix"""
-            if len(self.prefix) > size:
-                return
-            for letters in product(self.alphabet, repeat=size - len(self.prefix)):
-                yield self.prefix + "".join(a for a in letters)
-
-        if self.just_prefix:
-            if size == len(self.prefix) and not self.is_empty():
-                yield self.prefix
+    def possible_words():
+        """Yield all words of given size over the alphabet with prefix"""
+        if len(self.prefix) > size:
             return
-        for word in possible_words():
-            if all(patt not in word for patt in self.patterns):
-                yield word
+        for letters in product(self.alphabet, repeat=size - len(self.prefix)):
+            yield self.prefix + "".join(a for a in letters)
 
+    if self.just_prefix:
+        if size == len(self.prefix) and not self.is_empty():
+            yield self.prefix
+        return
+    for word in possible_words():
+        if all(patt not in word for patt in self.patterns):
+            yield word
+
+
+AvoidingWithPrefix.objects_of_size = objects_of_size
 
 # the strategies
 
@@ -236,7 +144,7 @@ class RemoveFrontOfPrefix(CartesianProductStrategy[AvoidingWithPrefix, Word]):
         occurrence using indices further to the right of the prefix can use at
         most the last k - 1 letters in the prefix."""
         if not avoiding_with_prefix.just_prefix:
-            safe = self.index_safe_to_remove_up_to(avoiding_with_prefix)
+            safe = avoiding_with_prefix.removable_prefix_length()
             if safe > 0:
                 prefix, patterns, alphabet = (
                     avoiding_with_prefix.prefix,
@@ -249,22 +157,6 @@ class RemoveFrontOfPrefix(CartesianProductStrategy[AvoidingWithPrefix, Word]):
                 end = AvoidingWithPrefix(end_prefix, patterns, alphabet)
                 return (start, end)
         return None
-
-    def index_safe_to_remove_up_to(self, avoiding_with_prefix: AvoidingWithPrefix):
-        prefix, patterns = (
-            avoiding_with_prefix.prefix,
-            avoiding_with_prefix.patterns,
-        )
-        # safe will be the index of the prefix in which we can remove upto without
-        # affecting the avoidance conditions
-        m = max(len(p) for p in patterns) if patterns else 1
-        safe = max(0, len(prefix) - m + 1)
-        for i in range(safe, len(prefix)):
-            end = prefix[i:]
-            if any(end == patt[: len(end)] for patt in patterns):
-                break
-            safe = i + 1
-        return safe
 
     def formal_step(self) -> str:
         return "removing redundant prefix"
@@ -328,7 +220,7 @@ if __name__ == "__main__":
     # input(
     #     ("Input the alphabet (letters should be separated by a" " comma):")
     # ).split(",")
-    example_patterns = (Word("aa"),)
+    example_patterns = ("aa",)
     # tuple(
     #     map(
     #         Word,
@@ -341,51 +233,16 @@ if __name__ == "__main__":
     #     )
     # )
 
-    start_class = AvoidingWithPrefix(Word(), example_patterns, example_alphabet)
-    searcher = CombinatorialSpecificationSearcher(start_class, pack, debug=True)
+    start_class = AvoidingWithPrefix("", example_patterns, example_alphabet)
+    searcher = CombinatorialSpecificationSearcher(start_class, pack, debug=False)
     spec = searcher.auto_search(status_update=10)
     print(spec)
-    print(spec.get_genf())
+    # print(spec.get_genf())
     import time
 
     for n in range(20):
-        print("=" * 10, n, "=" * 10)
-
-        start_time = time.time()
-        print(spec.count_objects_of_size(n))
-        print("Counting time:", round(time.time() - start_time, 2), "seconds")
-
-        start_time = time.time()
-        c = 0
-        for _ in spec.generate_objects_of_size(n):
-            c += 1
-        print(c)
-        print("Object generation time:", round(time.time() - start_time, 2), "seconds")
-
-        start_time = time.time()
-        random_word = spec.random_sample_object_of_size(n)
-        print(random_word)
-        print("Time to sample:", round(time.time() - start_time, 2), "seconds")
-
-    input(
-        '\nBijection example between "00" and "11" avoiding binary strings '
-        "(press any key to continue)"
-    )
-
-    specs = ParallelSpecFinder[AvoidingWithPrefix, Word, AvoidingWithPrefix, Word](
-        CombinatorialSpecificationSearcher(
-            AvoidingWithPrefix(Word(), ["00"], ["0", "1"]), pack
-        ),
-        CombinatorialSpecificationSearcher(
-            AvoidingWithPrefix(Word(), ["11"], ["0", "1"]), pack
-        ),
-    ).find()
-    assert specs is not None
-    spec1, spec2 = specs
-    bijection = Bijection.construct(spec1, spec2)
-    assert bijection is not None
-    for i in range(5):
-        for word in bijection.domain.generate_objects_of_size(i):
-            mapped_to = bijection.map(word)
-            assert bijection.inverse_map(mapped_to) == word
-            print(f"{word} -> {mapped_to}")
+        print(
+            n,
+            spec.count_objects_of_size(n),
+            sum(1 for _ in start_class.objects_of_size(n)),
+        )
