@@ -37,64 +37,25 @@ with respect to factor order is given.
 """
 from itertools import product
 from typing import Iterable, Iterator, Optional, Tuple, Union
-from word_scope_rs import Word, AvoidingWithPrefix  # type: ignore
 
-from comb_spec_searcher import (
-    AtomStrategy,
-    CartesianProductStrategy,
-    CombinatorialClass,
-    CombinatorialObject,
-    CombinatorialSpecificationSearcher,
-    DisjointUnionStrategy,
-    StrategyPack,
-)
+from comb_spec_searcher import (AtomStrategy, CartesianProductStrategy,
+                                CombinatorialClass, CombinatorialObject,
+                                CombinatorialSpecificationSearcher,
+                                DisjointUnionStrategy, StrategyPack)
 from comb_spec_searcher.bijection import ParallelSpecFinder
 from comb_spec_searcher.isomorphism import Bijection
-
+from word_scope_rs import AvoidingWithPrefix, Word  # type: ignore
 
 AvoidingWithPrefix.extra_parameters = tuple()
 
-
-def objects_of_size(self, size):
-    """Yield the words of given size that start with prefix and avoid the
-    patterns. If just_prefix, then only yield that word."""
-
-    def possible_words():
-        """Yield all words of given size over the alphabet with prefix"""
-        if len(self.prefix) > size:
-            return
-        for letters in product(self.alphabet, repeat=size - len(self.prefix)):
-            yield self.prefix + "".join(a for a in letters)
-
-    if self.just_prefix:
-        if size == len(self.prefix) and not self.is_empty():
-            yield self.prefix
-        return
-    for word in possible_words():
-        if all(patt not in word for patt in self.patterns):
-            yield word
-
-
-AvoidingWithPrefix.objects_of_size = objects_of_size
-
 # the strategies
-
 
 class ExpansionStrategy(DisjointUnionStrategy[AvoidingWithPrefix, Word]):
     def decomposition_function(
         self, avoiding_with_prefix: AvoidingWithPrefix
     ) -> Optional[Tuple[AvoidingWithPrefix, ...]]:
         if not avoiding_with_prefix.just_prefix:
-            alphabet, prefix, patterns = (
-                avoiding_with_prefix.alphabet,
-                avoiding_with_prefix.prefix,
-                avoiding_with_prefix.patterns,
-            )
-            children = [AvoidingWithPrefix(prefix, patterns, alphabet, True)]
-            for a in alphabet:
-                ends_with_a = AvoidingWithPrefix(prefix + a, patterns, alphabet)
-                children.append(ends_with_a)
-            return tuple(children)
+            return tuple(avoiding_with_prefix.expand_one_letter())
         return None
 
     def formal_step(self) -> str:
@@ -143,20 +104,10 @@ class RemoveFrontOfPrefix(CartesianProductStrategy[AvoidingWithPrefix, Word]):
         """If the k is the maximum length of a pattern to be avoided, then any
         occurrence using indices further to the right of the prefix can use at
         most the last k - 1 letters in the prefix."""
-        if not avoiding_with_prefix.just_prefix:
-            safe = avoiding_with_prefix.removable_prefix_length()
-            if safe > 0:
-                prefix, patterns, alphabet = (
-                    avoiding_with_prefix.prefix,
-                    avoiding_with_prefix.patterns,
-                    avoiding_with_prefix.alphabet,
-                )
-                start_prefix = prefix[:safe]
-                end_prefix = prefix[safe:]
-                start = AvoidingWithPrefix(start_prefix, patterns, alphabet, True)
-                end = AvoidingWithPrefix(end_prefix, patterns, alphabet)
-                return (start, end)
-        return None
+        children = avoiding_with_prefix.remove_front_of_prefix()
+        if children is not None:
+            children = tuple(children)
+        return children
 
     def formal_step(self) -> str:
         return "removing redundant prefix"
